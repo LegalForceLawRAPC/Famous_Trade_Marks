@@ -37,11 +37,17 @@ def get_famous_marks(mark_name: str):
                 }
             )
 
-    print(most_similar_trademarks)
+    if len(most_similar_trademarks) == 0:
+        return 1, most_similar_trademarks
+    if zero_count == 0:
+        return 0.5,most_similar_trademarks
+    
+    return 4 / (100* zero_count), most_similar_trademarks
             
 
 
 
 
 if __name__ == '__main__':
-   get_famous_marks("")
+   result = get_famous_marks("Shoes")
+   print(result)
