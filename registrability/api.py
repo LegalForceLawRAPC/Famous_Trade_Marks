@@ -5,7 +5,11 @@ from registrability.knowledge_graph import KnowledgeGraph
 import os
 from concurrent.futures import ThreadPoolExecutor
 from models import RegistrabilityRequest
-from classifier import registrability_mark_name
+import pprint
+from classifier.endpoint import classifier_infer
+
+
+from classifier.endpoint import registrability_mark_name
 
 class FeatureParams:
 
@@ -55,9 +59,10 @@ class FeatureParams:
         
         return 4 / (100* zero_count), most_similar_trademarks
     
-    def get_famous_personality(slef,trademark_name : str) -> tuple:
+    def get_famous_personality(self,trademark_name : str) -> tuple:
 
         try:
+            print(trademark_name)
             data = trademark_name
             resp_dict = {}
 
@@ -71,25 +76,22 @@ class FeatureParams:
         total_cnt = 0
 
         for mark in marks:
-           
-            for item in resp_dict[mark]["itemListElement"]:
+            
+            #__import__('pprint').pprint(resp_dict[mark])
     
+
+            for item in resp_dict[mark]["itemListElement"]:
+                #__import__('pprint').pprint(item)
                 total_cnt +=1
 
-                try:
-                    if "Person" in item["result"]["@type"] and mark.lower() in [
-                        x.lower()
-                        for x in re.sub(r"[:,.-]", "", item["result"]["name"]).split(
-                            " "
-                        )
-                    ]:
-                        print(item["result"]["names"])
+                try:    
+                    if "Person" in item["result"]["@type"]:
+                    
                         results.append(item["result"]["name"])
                 except:
                     pass
-       
-        
-
+                    
+    
         score = 1
         if len(results) > 4:
             score = 0
@@ -108,23 +110,25 @@ class FeatureParams:
         try:
             mark_name = request
             response = registrability_mark_name(mark_name)
-
+        
         except Exception as e:
-            return something_went_wrong()
+            return e
         
         expected_classes = no_of_classes
         results = {}
-        results["geo_sequences"] = response.data.get("expected_classes")
-
-        if(len(response["geo_sequence"])) > 0:
+        
+        results["geo_sequences"] = response["geo_sequences"]
+    
+        if(len(response["geo_sequences"])) > 0:
             results["geographic_distinctiveness"] = 0
         else:
             results["geographic_distinctiveness"] = 1
         
         res = response["generic_terms"]
+        
         if len(res) == 0:
             return 1
-
+        
         label_cnt = 0
 
         generic_words = []
@@ -156,6 +160,36 @@ class FeatureParams:
         results["generic_words"] = generic_words
         return results
 
+    @staticmethod
+    def get_merely_descriptive(mark_name, expected_classes, description):
+
+        class_words_dict = {}
+        generated_classes = []
+
+        for word in mark_name.lower().split():
+            _classes = [x["class_id"] for x in classifier_infer(word)]
+            for _class in _classes:
+                class_words_dict[_class] = list(
+                    set(class_words_dict.get(_class, []) + [word])
+                )
+            generated_classes.extend(_classes)
+
+        generated_classes = list(set(generated_classes))
+
+        affecting_words = []
+        cnt = 0
+        for _class in expected_classes:
+            if _class in generated_classes:
+                affecting_words.extend(class_words_dict[_class])
+                cnt += 1
+
+        return {
+            "score": 1 - (cnt / len(expected_classes)),
+            "words": list(set(affecting_words)),
+        }
+
+
+
 
                 
 
@@ -168,19 +202,34 @@ class FeatureParams:
             t1 = exector.submit(self.get_famous_marks, mark_name)
             t2 = exector.submit(self.get_famous_personality, request.request)
             t3 = exector.submit(self.get_geographic_distinctiveness_and_genericness_score,request.request,request.selected_classes)
+            t4 = exector.submit(self.get_merely_descriptive,mark_name,selected_classes,description)
 
         famous_marks, famous_mark_list = t1.result()
         interim = t2.result()
         famous_personality, famous_personality_list = interim
-        merely_descriptive = t3.result()
+        genericness = t3.result()["genericness"]
+        geographic_distinctiveness = t3.result()
+        merely_descriptive = t4.result()     
 
+        
         results = {
             "metric":{
                 "famous_marks_score" : famous_marks,
-                "famous_marks_list" : famous_mark_list,
-                "famous_personality_score": famous_personality,
-                "famous_personality_list" : famous_personality_list,
+                "genericness": genericness,
                 "merely_descriptive": merely_descriptive["score"],
+                "famous_personality": famous_personality,
+                "geographic_distinctiveness": geographic_distinctiveness[
+                    "geographic_distinctiveness"
+                ],
+                
+             
+            },
+            "meta":{
+                "famous_marks": famous_mark_list,
+                "famous_personality": list(set(famous_personality_list)),
+                "geo_sequences": geographic_distinctiveness["geo_sequences"],
+                "merely_descriptive": merely_descriptive["words"],
+                "generic_words": geographic_distinctiveness["generic_words"],
             }
         }
 
